@@ -48,49 +48,37 @@ def otsu_algo(mode: str | Literal['CT', 'MR', 'PET'],
         # Error
         raise ValueError('Invalid Mode. Mode Must Be "CT", "MR", or "PET".')
 
-    # Flatten Data
-    flat = image.flatten()
-
     # Sort in Ascending Order
-    sorted = np.sort(flat)
+    sorted = np.sort(image.flatten())
 
-    # Get Cumulative Distribution
-    dis = np.cumsum(sorted)
-    dis = dis / dis[-1]
+    # Cumulative Distribution
+    cdf = np.cumsum(sorted) / np.sum(sorted)
 
-    # Get Criteria
-    criteria = []
-    threshold_range = range(5, 100)
-    for j in threshold_range:
+    # Get Threshold (90,)
+    percentile = np.arange(50, 200) / 1000
 
-        # Get Threshold
-        index = np.where(dis <= j / 1600)[0][-1]
-        value = sorted[index]
+    index = np.searchsorted(cdf, percentile)
+    value = sorted[index]
 
-        # Thresholding
-        binary = (image > value)
+    # Thresholding (90, H, W, D)
+    binary = image > value[:, None, None, None]  
 
-        # Compute Weight
-        weight_1 = binary.sum() / image.size
-        weight_0 = 1 - weight_1
+    # Compute Weight (90,)
+    weight_1 = binary.sum(axis = (1, 2, 3)) / image.size
+    weight_0 = 1 - weight_1
 
-        # Extrene Case
-        if weight_1 == 0 or weight_0 == 0:
-            criteria.append(np.inf)
-            continue
+    # Extrene Case
+    valid = (weight_1 > 0) & (weight_0 > 0)
 
-        # Compute Variance
-        var_1 = image[binary == 1].var() if image[binary == 1].size > 0 else 0
-        var_0 = image[binary == 0].var() if image[binary == 0].size > 0 else 0
+    # Compute Variance (90,)
+    var_1 = np.var(image *  binary, axis = (1, 2, 3), where =  binary)
+    var_0 = np.var(image * ~binary, axis = (1, 2, 3), where = ~binary)
 
-        # Save Criteria to Buffer
-        criteria.append(weight_0 * var_0 + weight_1 * var_1)
-
-    # Python List to Numpy Array
-    criteria = np.array(criteria)
+    # Compute Criteria (90,)
+    criteria = np.array((weight_0[valid] * var_0[valid]) + (weight_1[valid] * var_1[valid]))
 
     # Get Best Threshold in All Criteria
-    index = np.where(dis <= threshold_range[criteria.argmin()] / 1600)[0][-1]
+    index = np.searchsorted(cdf, percentile[criteria.argmin()])
     value = sorted[index]
 
     # Thresholding
@@ -107,6 +95,41 @@ def otsu_algo(mode: str | Literal['CT', 'MR', 'PET'],
 
     # Slect Largest Component
     hmask = (components == largest)
+
+    for j in range(hmask.shape[2]):
+
+        # Thresholding
+        binary = hmask[:, :, j]
+
+        # Fill Holes + Remove Small Conjection
+        binary = ndimage.binary_fill_holes(binary, structure = np.ones((3, 3)))
+        binary = ndimage.binary_erosion(binary, structure = np.ones((2, 2)), iterations = 2)
+
+        # Get Connective Component
+        components, features = ndimage.label(binary)
+
+        # Compute Centroids
+        centroids = np.array(ndimage.center_of_mass(binary, components, range(1, features + 1)))
+
+        # Compute Center
+        image_center = np.array(binary.shape) // 2
+
+        # Extreme Case
+        if centroids.size == 0:
+            hmask[:, :, j] = np.zeros((hmask.shape[0], hmask.shape[1]))
+            continue
+
+        # Find the Component Closest to the Center
+        distances = np.linalg.norm(centroids - image_center, axis = 1)
+        center = np.argmin(distances) + 1
+
+        # Extreme Case
+        if distances.min() > 50:
+            hmask[:, :, j] = np.zeros((hmask.shape[0], hmask.shape[1]))
+            continue
+
+        # Select Closest Component
+        hmask[:, :, j] &= (components == center)
 
     # Head Mask Buffer
     mask = hmask.copy()
