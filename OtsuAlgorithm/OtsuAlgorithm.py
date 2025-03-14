@@ -10,6 +10,8 @@ import nibabel as nib
 
 from scipy import ndimage
 
+import torch
+
 
 """
 ========================================================================================================================
@@ -27,6 +29,9 @@ def otsu_algo(mode: str | Literal['CT', 'MR', 'PET'],
     print("Otsu's Algorithm")
     print('===========================================================================================================')
     print()
+
+    # Device: GPU or CPU
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load Data and Image
     datum = nib.load(file_path)
@@ -47,39 +52,46 @@ def otsu_algo(mode: str | Literal['CT', 'MR', 'PET'],
     else:
         # Error
         raise ValueError('Invalid Mode. Mode Must Be "CT", "MR", or "PET".')
+    
+    # Tensor
+    image = torch.from_numpy(image).to(device)
 
     # Sort in Ascending Order
-    sorted = np.sort(image.flatten())
+    sorted, _ = torch.sort(image.flatten())
 
     # Cumulative Distribution
-    cdf = np.cumsum(sorted) / np.sum(sorted)
+    cdf = torch.cumsum(sorted, dim = 0) / torch.sum(sorted)
 
-    # Get Threshold (90,)
-    percentile = np.arange(50, 200) / 1000
+    # Search Range
+    percentile = torch.arange(50, 100, device = device) / 1000
 
-    index = np.searchsorted(cdf, percentile)
+    # Get Threshold
+    index = torch.searchsorted(cdf, percentile)
     value = sorted[index]
 
-    # Thresholding (90, H, W, D)
+    # Thresholding
     binary = image > value[:, None, None, None]  
 
-    # Compute Weight (90,)
-    weight_1 = binary.sum(axis = (1, 2, 3)) / image.size
+    # Compute Weight
+    weight_1 = binary.sum(dim = (1, 2, 3)) / image.numel()
     weight_0 = 1 - weight_1
 
     # Extrene Case
     valid = (weight_1 > 0) & (weight_0 > 0)
 
-    # Compute Variance (90,)
-    var_1 = np.var(image *  binary, axis = (1, 2, 3), where =  binary)
-    var_0 = np.var(image * ~binary, axis = (1, 2, 3), where = ~binary)
+    # Compute Variance
+    var_1 = torch.var(image *  binary, dim = (1, 2, 3), unbiased = False)
+    var_0 = torch.var(image * ~binary, dim = (1, 2, 3), unbiased = False)
 
-    # Compute Criteria (90,)
-    criteria = np.array((weight_0[valid] * var_0[valid]) + (weight_1[valid] * var_1[valid]))
+    # Compute Criteria
+    criteria = (weight_0[valid] * var_0[valid]) + (weight_1[valid] * var_1[valid])
 
     # Get Best Threshold in All Criteria
-    index = np.searchsorted(cdf, percentile[criteria.argmin()])
-    value = sorted[index]
+    index = criteria.argmin()
+    value = value[index].item()
+
+    # Numpy Array
+    image = image.cpu().numpy()
 
     # Thresholding
     binary = (image > value)
