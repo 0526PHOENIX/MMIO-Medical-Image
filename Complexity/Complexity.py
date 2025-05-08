@@ -120,14 +120,14 @@ class Complexity():
             elif isinstance(module, (nn.LocalResponseNorm)):
                 '''
                 x / (k + alpha * sum(x ^ 2)) ^ beta
-                    x ^ 2:         size
-                    sum + scale:   2
+                    x ^ 2:         K
+                    sum:           K (add & Divise)
                     add k:         1
                     power:         1
                     divide:        1
                 '''
                 # FLOPs
-                flops = (module.size + 5) * feature_out.numel()
+                flops = (2 * module.size + 3) * feature_out.numel()
 
             # Dropout
             elif isinstance(module, (nn.Dropout, nn.Dropout1d, nn.Dropout2d, nn.Dropout3d, nn.AlphaDropout, nn.FeatureAlphaDropout)):
@@ -140,9 +140,34 @@ class Complexity():
                 flops = 2 * feature_out.numel()
 
             # Fully Connected
-            elif isinstance(module, nn.Linear):
+            elif isinstance(module, (nn.Linear, nn.LazyLinear)):
+                '''
+                2 * C_in * C_out
+                '''
                 # FLOPs
-                flops = 2 * feature_in.numel() * feature_out.numel()
+                flops = 2 * module.in_features * module.out_features
+                # Bias
+                if module.bias is not None:
+                    flops += module.out_features
+
+            # Identical Mapping
+            elif isinstance(module, nn.Identity):
+                '''
+                pass-through operation
+                '''
+                # FLOPs
+                flops = 0
+
+            # Identical Mapping
+            elif isinstance(module, nn.Bilinear):
+                '''
+                2 * C_in1 * C_in2 * C_out
+                '''
+                # FLOPs
+                flops = 2 * module.in1_features * module.in2_features * module.out_features
+                # Bias
+                if module.bias is not None:
+                    flops += module.out_features
 
             # Maximum Pooling 
             elif isinstance(module, (nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.FractionalMaxPool2d, nn.FractionalMaxPool3d)):
@@ -165,22 +190,22 @@ class Complexity():
             # Average Pooling 
             elif isinstance(module, (nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d)):
                 '''
-                K add + 1 division
+                (K - 1) add + 1 division
                 '''
                 # Kernel Volume Size
                 kernel_volume = get_kernel_volume(module)
                 # FLOPs
-                flops = (kernel_volume + 1) * feature_out.numel()
+                flops = kernel_volume * feature_out.numel()
 
             # Power-Averge Pooling
             elif isinstance(module, (nn.LPPool1d, nn.LPPool2d)):
                 '''
-                K power + 1 sum + 1 root
+                K power + (K - 1) add + 1 root
                 '''
                 # Kernel Volume Size
                 kernel_volume = get_kernel_volume(module)
                 # FLOPs
-                flops = (math.prod(module.kernel_size) + 2) * feature_out.numel()
+                flops = 2 * math.prod(module.kernel_size) * feature_out.numel()
 
             # Adaptive Maximum Pooling
             elif isinstance(module, (nn.AdaptiveMaxPool1d, nn.AdaptiveMaxPool2d, nn.AdaptiveMaxPool3d)):
@@ -197,53 +222,92 @@ class Complexity():
             # Adaptive Average Pooling
             elif isinstance(module, (nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d)):
                 '''
-                K add + 1 division
+                (K - 1) add + 1 division
                 '''
                 # Check Number of Axis
                 assert len(feature_in.shape[2:]) == len(feature_out.shape[2:]), "Mismatch in spatial dimensions"
                 # kernel Size
                 kernel_size = [max(1, math.ceil(in_s / out_s)) for in_s, out_s in zip(feature_in.shape[2:], feature_out.shape[2:])]
                 # FLOPs
-                flops = (math.prod(kernel_size) + 1) * feature_out.numel()
+                flops = math.prod(kernel_size) * feature_out.numel()
 
-            # Activation (Only Estimation)
-            elif isinstance(module, (nn.ReLU, nn.LeakyReLU, nn.GELU, nn.SELU, nn.SiLU, nn.Tanh, nn.Sigmoid, nn.Softmax2d, nn.Softmax)):
+            # Activation (Only Approximation)
+            elif isinstance(module, (nn.ELU, nn.Hardshrink, nn.Hardsigmoid, nn.Hardtanh, nn.Hardswish, nn.LeakyReLU, nn.LogSigmoid,
+                                     nn.PReLU, nn.ReLU, nn.ReLU6, nn.RReLU, nn.SELU, nn.GELU, nn.Sigmoid, nn.SiLU, nn.Mish, nn.Softplus,
+                                     nn.Softshrink, nn.Softsign, nn.Tanh, nn.Tanhshrink, nn.Threshold, nn.GLU, nn.Softmin, nn.Softmax,
+                                     nn.Softmax2d, nn.LogSoftmax, nn.AdaptiveLogSoftmaxWithLoss)):
+                '''
+                4 * C_out * Feature Size
+                '''
                 # FLOPs
                 flops = 4 * feature_out.numel()
 
             # Upsample
             elif isinstance(module, nn.Upsample):
-                # Nearest Interpolation
+                # Nearest Interpolation (1D, 2D ,3D)
                 if module.mode == 'nearest':
+                    '''
+                    direct copy of nearest input value
+                    '''
                     # FLOPs
                     flops = 0
-                # Bilinear Interpolation
-                elif module.mode == 'bilinear':
+                # Linear Interpolation (1D)
+                elif module.mode == 'linear':
+                    '''
+                    2-point linear interpolation
+                        1 multiply + 1 multiply + 1 add
+                    '''
                     # FLOPs
-                    flops = 4 * feature_out.numel()
+                    flops = 3 * feature_out.numel()
+                # Bilinear Interpolation (2D)
+                elif module.mode == 'bilinear':
+                    '''
+                    4-point weighted interpolation
+                        4 multiply + 3 add
+                    '''
+                    # FLOPs
+                    flops = 7 * feature_out.numel()
+                # Bicubic Interpolation (2D) (Only Approximation)
+                elif module.mode == 'bicubic':
+                    '''
+                    16-point cubic interpolation
+                        16 multiply + 15 add
+                    '''
+                    # FLOPs
+                    flops = 31 * feature_out.numel()
+                # Trilinear Interpolation (3D)
+                elif module.mode == 'trilinear':
+                    '''
+                    8-point weighted interpolation
+                        8 multiply + 7 add
+                    '''
+                    # FLOPs
+                    flops = 15 * feature_out.numel()
                 else:
-                    raise ValueError('Invalid Mode for Upsample')
+                    raise NotImplementedError(f"FLOPs for Upsample mode '{module.mode}' not implemented")
             
             # Nearest Interpolation
             elif isinstance(module, nn.UpsamplingNearest2d):
+                '''
+                direct copy of nearest input value
+                '''
                 # FLOPs
                 flops = 0
 
             # Bilinear Interpolation
             elif isinstance(module, nn.UpsamplingBilinear2d):
+                '''
+                4-point weighted interpolation
+                    4 multiply + 3 add
+                '''
                 # FLOPs
-                flops = 4 * feature_out.numel()
+                flops = 7 * feature_out.numel()
 
-            # Pixel Shuffle
-            elif isinstance(module, nn.PixelShuffle):
-                # FLOPs
-                if module.upscale_factor == 2:
-                    flops = 0
-                elif module.upscale_factor == 3:
-                    flops = 9 * feature_in.shape[1] * feature_out.shape[1]
-
-            # Flatten
-            elif isinstance(module, nn.Flatten):
+            # Pixel Shuffle & Pixel Unshuffle & Channel Shuffle & Flatten
+            elif isinstance(module, (nn.PixelShuffle, nn.PixelUnshuffle, nn.ChannelShuffle, nn.Flatten)):
+                '''
+                only pixel rearrangement
+                '''
                 # FLOPs
                 flops = 0
 
@@ -259,8 +323,8 @@ class Complexity():
 
             # Others
             else:
-                # # Check Layer Name
-                # print(module._get_name())
+                # Check Layer Name
+                print(module._get_name())
                 # FLOPs
                 flops = 0
 
@@ -413,28 +477,23 @@ Main Function
 """
 if __name__ == '__main__':
 
-    # # Model
-    # all_model = {
-    #                 'vgg11':       models.vgg11(),
-    #                 'vgg13':       models.vgg13(),
-    #                 'vgg16':       models.vgg16(),
-    #                 'vgg19':       models.vgg19(),
-    #                 'resnet18':    models.resnet18(),
-    #                 'resnet34':    models.resnet34(),
-    #                 'resnet50':    models.resnet50(),
-    #                 'resnet101':   models.resnet101(),
-    #                 'resnet152':   models.resnet152(),
-    #                 'densenet121': models.densenet121(),
-    #                 'densenet169': models.densenet169(),
-    #                 'densenet201': models.densenet201(),
-    #                 'densenet161': models.densenet161(),
-    #             }
-
     # Model
     all_model = {
                     'vgg11':       models.vgg11(),
+                    'vgg13':       models.vgg13(),
+                    'vgg16':       models.vgg16(),
+                    'vgg19':       models.vgg19(),
+                    'resnet18':    models.resnet18(),
+                    'resnet34':    models.resnet34(),
+                    'resnet50':    models.resnet50(),
+                    'resnet101':   models.resnet101(),
+                    'resnet152':   models.resnet152(),
+                    'densenet121': models.densenet121(),
+                    'densenet169': models.densenet169(),
+                    'densenet201': models.densenet201(),
+                    'densenet161': models.densenet161(),
                 }
-
+    
     for name, model in all_model.items():
 
         print()
@@ -444,9 +503,4 @@ if __name__ == '__main__':
         calculator = Complexity(model, (3, 224, 224), torch.device('cuda'))
         calculator.profile('G', num_input = 1)
 
-
-    model = nn.Conv2d(32, 32, 3)
-
-    print()
-    print(model.kernel_size)
-    print()
+    pass
