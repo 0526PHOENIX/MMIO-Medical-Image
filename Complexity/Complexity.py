@@ -62,67 +62,154 @@ class Complexity():
         """
         def forward_hook(module: Module, feature_in: tuple[Tensor], feature_out: Tensor) -> None:
 
-            # Conver Tuple to Tensor
-            feature_in = feature_in[0]
+            # Convert Tuple to Tensor
+            feature_in: Tensor = feature_in[0]
 
             # FLOPs
             flops = None
 
-            # Convolution 2D & Transpose Convolution 2D
-            if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
-                # Input Channels
-                channel_in = feature_in.shape[1]
-                # Kernel Size
-                kernel = module.kernel_size
+            # Convolution 1D & Transpose Convolution 1D & Lazy Version
+            if isinstance(module, (nn.Conv1d, nn.ConvTranspose1d, nn.LazyConv1d, nn.LazyConvTranspose1d)):
+                '''
+                2 * (C_in / Groups) * C_out * K * L_out
+                '''
                 # FLOPs
-                flops = 2 * kernel[0] * kernel[1] * channel_in * feature_out.numel()
+                flops = 2 * math.prod(module.kernel_size) * module.in_channels * feature_out.numel() / module.groups
+                # Bias
+                if module.bias is not None:
+                    flops += feature_out.numel()
+
+            # Convolution 2D & Transpose Convolution 2D & Lazy Version
+            elif isinstance(module, (nn.Conv2d, nn.ConvTranspose2d, nn.LazyConv2d, nn.LazyConvTranspose2d)):
+                '''
+                2 * (C_in / Groups) * C_out * K_h * K_w * H_out * W_out
+                '''
+                # FLOPs
+                flops = 2 * math.prod(module.kernel_size) * module.in_channels * feature_out.numel() / module.groups
+                # Bias
+                if module.bias is not None:
+                    flops += feature_out.numel()
+
+            # Convolution 3D & Transpose Convolution 3D & Lazy Version
+            elif isinstance(module, (nn.Conv3d, nn.ConvTranspose3d, nn.LazyConv3d, nn.LazyConvTranspose3d)):
+                '''
+                2 * (C_in / Groups) * C_out * K_d * K_h * K_w * D_out * H_out * W_out
+                '''
+                # FLOPs
+                flops = 2 * math.prod(module.kernel_size) * module.in_channels * feature_out.numel() / module.groups
+                # Bias
+                if module.bias is not None:
+                    flops += feature_out.numel()
+
+            # Normalization
+            elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LazyBatchNorm1d, nn.LazyBatchNorm2d, nn.LazyBatchNorm3d, nn.SyncBatchNorm,
+                                     nn.InstanceNorm1d, nn.InstanceNorm2d, nn.InstanceNorm3d, nn.LazyInstanceNorm1d, nn.LazyInstanceNorm2d, nn.LazyInstanceNorm3d,
+                                     nn.GroupNorm, nn.LayerNorm)):
+                '''
+                ((x - mean) / sqrt(variance)) * scale + shift
+                    substract mean: 1
+                    square root:    1
+                    variance:       2
+                    scale:          1
+                    shift:          1
+                '''
+                # FLOPs
+                flops = (6 if module.affine else 4) * feature_out.numel()
+
+            # Normalization
+            elif isinstance(module, (nn.LocalResponseNorm)):
+                '''
+                x / (k + alpha * sum(x ^ 2)) ^ beta
+                    x ^ 2:         size
+                    sum + scale:   2
+                    add k:         1
+                    power:         1
+                    divide:        1
+                '''
+                # FLOPs
+                flops = (module.size + 5) * feature_out.numel()
+
+            # Dropout
+            elif isinstance(module, (nn.Dropout, nn.Dropout1d, nn.Dropout2d, nn.Dropout3d, nn.AlphaDropout, nn.FeatureAlphaDropout)):
+                '''
+                (x * binary mask) * scale
+                    binary mask: 1
+                    scale:       1    
+                '''
+                # FLOPs
+                flops = 2 * feature_out.numel()
 
             # Fully Connected
             elif isinstance(module, nn.Linear):
                 # FLOPs
                 flops = 2 * feature_in.numel() * feature_out.numel()
 
-            # Batch Normalization
-            elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+            # Maximum Pooling 
+            elif isinstance(module, (nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.FractionalMaxPool2d, nn.FractionalMaxPool3d)):
+                '''
+                (K - 1) comparisons per output element
+                '''
+                # Kernel Volume Size
+                kernel_volume = get_kernel_volume(module)
                 # FLOPs
-                flops = 4 * feature_out.numel()
+                flops = (kernel_volume - 1) * feature_out.numel()
 
-            # Instance Normalization
-            elif isinstance(module, (nn.InstanceNorm1d, nn.InstanceNorm2d)):
+            # Maximum Unpooling 
+            elif isinstance(module, (nn.MaxUnpool1d, nn.MaxUnpool2d, nn.MaxUnpool3d)):
+                '''
+                1 scatter per input element
+                '''
                 # FLOPs
-                flops = 7 * feature_out.numel()
+                flops = 1 * feature_in.numel()
 
-            # Group Normalization
-            elif isinstance(module, nn.GroupNorm):
+            # Average Pooling 
+            elif isinstance(module, (nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d)):
+                '''
+                K add + 1 division
+                '''
+                # Kernel Volume Size
+                kernel_volume = get_kernel_volume(module)
                 # FLOPs
-                flops = 4 * feature_out.numel()
+                flops = (kernel_volume + 1) * feature_out.numel()
 
-            # Dropout
-            elif isinstance(module, (nn.Dropout, nn.Dropout1d, nn.Dropout2d)):
+            # Power-Averge Pooling
+            elif isinstance(module, (nn.LPPool1d, nn.LPPool2d)):
+                '''
+                K power + 1 sum + 1 root
+                '''
+                # Kernel Volume Size
+                kernel_volume = get_kernel_volume(module)
                 # FLOPs
-                flops = 2 * feature_out.numel()
+                flops = (math.prod(module.kernel_size) + 2) * feature_out.numel()
+
+            # Adaptive Maximum Pooling
+            elif isinstance(module, (nn.AdaptiveMaxPool1d, nn.AdaptiveMaxPool2d, nn.AdaptiveMaxPool3d)):
+                '''
+                (K - 1) comparisons per output element
+                '''
+                # Check Number of Axis
+                assert len(feature_in.shape[2:]) == len(feature_out.shape[2:]), "Mismatch in spatial dimensions"
+                # kernel Size
+                kernel_size = [max(1, math.ceil(in_s / out_s)) for in_s, out_s in zip(feature_in.shape[2:], feature_out.shape[2:])]
+                # FLOPs
+                flops = (math.prod(kernel_size) - 1) * feature_out.numel()
+
+            # Adaptive Average Pooling
+            elif isinstance(module, (nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d)):
+                '''
+                K add + 1 division
+                '''
+                # Check Number of Axis
+                assert len(feature_in.shape[2:]) == len(feature_out.shape[2:]), "Mismatch in spatial dimensions"
+                # kernel Size
+                kernel_size = [max(1, math.ceil(in_s / out_s)) for in_s, out_s in zip(feature_in.shape[2:], feature_out.shape[2:])]
+                # FLOPs
+                flops = (math.prod(kernel_size) + 1) * feature_out.numel()
 
             # Activation (Only Estimation)
             elif isinstance(module, (nn.ReLU, nn.LeakyReLU, nn.GELU, nn.SELU, nn.SiLU, nn.Tanh, nn.Sigmoid, nn.Softmax2d, nn.Softmax)):
                 # FLOPs
                 flops = 4 * feature_out.numel()
-
-            # Pooling 
-            elif isinstance(module, (nn.MaxPool2d, nn.AvgPool2d)):
-                # Kernel Size
-                kernel = module.kernel_size
-                # FLOPs
-                flops = kernel * kernel * feature_out.numel()
-
-            # Pooling
-            elif isinstance(module, (nn.AdaptiveAvgPool2d, nn.AdaptiveMaxPool2d)):
-                # Check Shape
-                if (feature_in.shape[2] != feature_in.shape[3] or feature_out.shape[2] != feature_out.shape[3]):
-                    raise ValueError('Invalid Input or Output Shape')
-                # kernel Size
-                kernel = math.ceil(feature_in.shape[3] / feature_out.shape[3])
-                # FLOPs
-                flops = kernel * kernel * feature_out.numel()
 
             # Upsample
             elif isinstance(module, nn.Upsample):
@@ -160,10 +247,20 @@ class Complexity():
                 # FLOPs
                 flops = 0
 
+            # Padding
+            elif isinstance(module, (nn.ZeroPad1d, nn.ZeroPad2d, nn.ZeroPad3d, nn.CircularPad1d, nn.CircularPad2d, nn.CircularPad3d,
+                                     nn.ConstantPad1d, nn.ConstantPad2d, nn.ConstantPad3d, nn.ReflectionPad1d, nn.ReflectionPad2d, nn.ReflectionPad3d,
+                                     nn.ReplicationPad1d, nn.ReplicationPad2d, nn.ReplicationPad3d)):
+                '''
+                no arithmetic computation
+                '''
+                # FLOPs
+                flops = 0
+
             # Others
             else:
-                # Check Layer Name
-                print(module._get_name())
+                # # Check Layer Name
+                # print(module._get_name())
                 # FLOPs
                 flops = 0
 
@@ -172,6 +269,26 @@ class Complexity():
             self.flops += flops or 0
 
             return
+
+        """
+        ----------------------------------------------------------------------------------------------------------------
+        Get Kernel Volume Size of Pooling Layer
+        ----------------------------------------------------------------------------------------------------------------
+        """   
+        def get_kernel_volume(module: Module) -> int:
+            # 
+            if isinstance(module.kernel_size, int):
+                # One Dimension Data
+                if isinstance(module, (nn.MaxPool1d, nn.AvgPool1d, nn.LPPool1d)):
+                    return module.kernel_size ** 1
+                # Two Dimension Data (Square Structure)
+                elif isinstance(module, (nn.MaxPool2d, nn.FractionalMaxPool2d, nn.AvgPool2d, nn.LPPool2d)):
+                    return module.kernel_size ** 2
+                # Three Dimension Data (Cubic Structure)
+                elif isinstance(module, (nn.MaxPool3d, nn.FractionalMaxPool3d, nn.AvgPool3d)):
+                    return module.kernel_size ** 3
+            else:
+                return math.prod(module.kernel_size)
 
         """
         ----------------------------------------------------------------------------------------------------------------
@@ -212,11 +329,18 @@ class Complexity():
         dummy = torch.rand((1, *self.dummy)).to(self.device)
         dummy = [dummy for _ in range(num_input)]
 
+        # Model Warm Up
+        for _ in range(100):
+            self.model(*dummy)
+
+        # Synchronize the GPU Operation
+        torch.cuda.synchronize()
+
         # Start Time
         time_start = time.time()
 
         # Forward Pass
-        for _ in range(10):
+        for _ in range(100):
             self.actvs = 0
             self.flops = 0
             self.model(*dummy)
@@ -224,15 +348,20 @@ class Complexity():
         # End Time
         time_end = time.time()
 
+        # FLOPs and FLOPs per Second
+        flops = self.flops
+        flops_per_sec = self.flops / ((time_end - time_start) / 100)
+
         # Activations
         actvs = self.actvs
 
-        # FLOPs and FLOPs per Second
-        flops = self.flops
-        flops_per_sec = self.flops / ((time_end - time_start) / 10)
-
         # Memory Cost
-        memory = int((actvs * 2 * 4 * batch_size) / (1024 ** 2))
+        data_size = torch.tensor([], dtype = next(self.model.parameters()).dtype).element_size()
+        memory = int((actvs * 2 * data_size * batch_size) / (1024 ** 2))
+
+        # Frame Per Second
+        fps = 1 / ((time_end - time_start) / 100)
+        fps = round(fps, 3)
 
         # Magnitude
         actvs = round(actvs * 1e-6, 3)
@@ -253,9 +382,8 @@ class Complexity():
         Parameter
         ----------------------------------------------------------------------------------------------------------------
         """
-        # Total Parameter & Trainable Parameter
-        num_param = sum(param.numel() for param in self.model.parameters())
-        num_param_train = sum(param.numel() for param in self.model.parameters() if param.requires_grad)
+        # Trainable Parameter
+        num_param = sum(param.numel() for param in self.model.parameters() if param.requires_grad)
 
         """
         ----------------------------------------------------------------------------------------------------------------
@@ -263,16 +391,16 @@ class Complexity():
         ----------------------------------------------------------------------------------------------------------------
         """
         # Output Format
-        title = "{:^21}|{:^21}|{:^21}|{:^21}|{:^21}|{:^21}"
-        space = "{:^21}|{:^21}|{:^21}|{:^21,}|{:^21,}|{:^21,}"
+        title = "{:^20}|{:^20}|{:^20}|{:^20}|{:^20}|{:^20}"
+        space = "{:^20}|{:^20}|{:^20}|{:^20,}|{:^20,}|{:^20,}"
 
         # Title
-        print('-' * 130)
-        print(title.format(order + ' FLOPs', order + ' FLOPS', 'M Acts', 'Memory (MB)', 'Params', 'Trainable Params'))
-        print('-' * 130)
+        print('-' * 125)
+        print(title.format(order + ' FLOPs', order + ' FLOPS', 'M Acts', 'FPS', 'Memory (MB)', 'Params'))
+        print('-' * 125)
 
         # Output Log
-        print(space.format(flops, flops_per_sec, actvs, memory, num_param, num_param_train))
+        print(space.format(flops, flops_per_sec, actvs, fps, memory, num_param))
         print()
 
         return
@@ -285,21 +413,26 @@ Main Function
 """
 if __name__ == '__main__':
 
+    # # Model
+    # all_model = {
+    #                 'vgg11':       models.vgg11(),
+    #                 'vgg13':       models.vgg13(),
+    #                 'vgg16':       models.vgg16(),
+    #                 'vgg19':       models.vgg19(),
+    #                 'resnet18':    models.resnet18(),
+    #                 'resnet34':    models.resnet34(),
+    #                 'resnet50':    models.resnet50(),
+    #                 'resnet101':   models.resnet101(),
+    #                 'resnet152':   models.resnet152(),
+    #                 'densenet121': models.densenet121(),
+    #                 'densenet169': models.densenet169(),
+    #                 'densenet201': models.densenet201(),
+    #                 'densenet161': models.densenet161(),
+    #             }
+
     # Model
     all_model = {
                     'vgg11':       models.vgg11(),
-                    'vgg13':       models.vgg13(),
-                    'vgg16':       models.vgg16(),
-                    'vgg19':       models.vgg19(),
-                    'resnet18':    models.resnet18(),
-                    'resnet34':    models.resnet34(),
-                    'resnet50':    models.resnet50(),
-                    'resnet101':   models.resnet101(),
-                    'resnet152':   models.resnet152(),
-                    'densenet121': models.densenet121(),
-                    'densenet169': models.densenet169(),
-                    'densenet201': models.densenet201(),
-                    'densenet161': models.densenet161(),
                 }
 
     for name, model in all_model.items():
@@ -309,4 +442,11 @@ if __name__ == '__main__':
 
         # Compute Complexity
         calculator = Complexity(model, (3, 224, 224), torch.device('cuda'))
-        calculator.profile('G', num_input = 1, batch_size = 1)
+        calculator.profile('G', num_input = 1)
+
+
+    model = nn.Conv2d(32, 32, 3)
+
+    print()
+    print(model.kernel_size)
+    print()
