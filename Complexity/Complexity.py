@@ -43,7 +43,10 @@ class Complexity():
         # FLOPs
         self.flops = 0
 
-        # Calculate FLOPs
+        # Not Implemented Module
+        self.exclude = set()
+
+        # Capture Information from Forward Pass
         self.hook_layer()
 
         return
@@ -57,7 +60,7 @@ class Complexity():
 
         """
         ----------------------------------------------------------------------------------------------------------------
-        Calculate FLOPs
+        Calculate FLOPs & Activations
         ----------------------------------------------------------------------------------------------------------------
         """
         def forward_hook(module: Module, feature_in: tuple[Tensor], feature_out: Tensor) -> None:
@@ -102,9 +105,9 @@ class Complexity():
                     flops += feature_out.numel()
 
             # Normalization
-            elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LazyBatchNorm1d, nn.LazyBatchNorm2d, nn.LazyBatchNorm3d, nn.SyncBatchNorm,
-                                     nn.InstanceNorm1d, nn.InstanceNorm2d, nn.InstanceNorm3d, nn.LazyInstanceNorm1d, nn.LazyInstanceNorm2d, nn.LazyInstanceNorm3d,
-                                     nn.GroupNorm, nn.LayerNorm)):
+            elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.LazyBatchNorm1d, nn.LazyBatchNorm2d,
+                                     nn.LazyBatchNorm3d, nn.SyncBatchNorm, nn.InstanceNorm1d, nn.InstanceNorm2d, nn.InstanceNorm3d,
+                                     nn.LazyInstanceNorm1d, nn.LazyInstanceNorm2d, nn.LazyInstanceNorm3d, nn.GroupNorm)):
                 '''
                 ((x - mean) / sqrt(variance)) * scale + shift
                     substract mean: 1
@@ -117,7 +120,20 @@ class Complexity():
                 flops = (6 if module.affine else 4) * feature_out.numel()
 
             # Normalization
-            elif isinstance(module, (nn.LocalResponseNorm)):
+            elif isinstance(module, nn.LayerNorm):
+                '''
+                ((x - mean) / sqrt(variance)) * scale + shift
+                    substract mean: 1
+                    square root:    1
+                    variance:       2
+                    scale:          1
+                    shift:          1
+                '''
+                # FLOPs
+                flops = (6 if module.elementwise_affine else 4) * feature_out.numel()
+
+            # Normalization
+            elif isinstance(module, nn.LocalResponseNorm):
                 '''
                 x / (k + alpha * sum(x ^ 2)) ^ beta
                     x ^ 2:         K
@@ -324,7 +340,7 @@ class Complexity():
             # Others
             else:
                 # Check Layer Name
-                print(module._get_name())
+                self.exclude.add(module._get_name())
                 # FLOPs
                 flops = 0
 
@@ -467,6 +483,24 @@ class Complexity():
         print(space.format(flops, flops_per_sec, actvs, fps, memory, num_param))
         print()
 
+        """
+        ----------------------------------------------------------------------------------------------------------------
+        Warning
+        ----------------------------------------------------------------------------------------------------------------
+        """
+        # Check Not Implemented Module Set
+        if self.exclude:
+            
+            # Title
+            print('*' * 125)
+            print('Warning !!! Above Estimations Ignore Following Modules !!! The FLOPs Would be Underestimated !!!')
+            print('*' * 125)
+
+            # Output Log
+            print()
+            print(self.exclude)
+            print()
+
         return
 
 
@@ -477,21 +511,44 @@ Main Function
 """
 if __name__ == '__main__':
 
+    # # Model
+    # all_model = {
+    #                 'vgg11':                models.vgg11(),
+    #                 'vgg13':                models.vgg13(),
+    #                 'vgg16':                models.vgg16(),
+    #                 'vgg19':                models.vgg19(),
+    #                 'resnet18':             models.resnet18(),
+    #                 'resnet34':             models.resnet34(),
+    #                 'resnet50':             models.resnet50(),
+    #                 'resnet101':            models.resnet101(),
+    #                 'resnet152':            models.resnet152(),
+    #                 'densenet121':          models.densenet121(),
+    #                 'densenet161':          models.densenet161(),
+    #                 'densenet169':          models.densenet169(),
+    #                 'densenet201':          models.densenet201(),
+    #             }
+    
+    # # Model
+    # all_model = {
+    #                 'convnext_base':        models.convnext_base(),
+    #                 'convnext_large':       models.convnext_large(),
+    #                 'convnext small':       models.convnext_small(),
+    #                 'convnext tiny':        models.convnext_tiny(),
+    #             }
+
     # Model
     all_model = {
-                    'vgg11':       models.vgg11(),
-                    'vgg13':       models.vgg13(),
-                    'vgg16':       models.vgg16(),
-                    'vgg19':       models.vgg19(),
-                    'resnet18':    models.resnet18(),
-                    'resnet34':    models.resnet34(),
-                    'resnet50':    models.resnet50(),
-                    'resnet101':   models.resnet101(),
-                    'resnet152':   models.resnet152(),
-                    'densenet121': models.densenet121(),
-                    'densenet169': models.densenet169(),
-                    'densenet201': models.densenet201(),
-                    'densenet161': models.densenet161(),
+                    'efficientnet b0':          models.efficientnet_b0(),
+                    'efficientnet b1':          models.efficientnet_b1(),
+                    'efficientnet b2':          models.efficientnet_b2(),
+                    'efficientnet b3':          models.efficientnet_b3(),
+                    'efficientnet b4':          models.efficientnet_b4(),
+                    'efficientnet b5':          models.efficientnet_b5(),
+                    'efficientnet b6':          models.efficientnet_b6(),
+                    'efficientnet b7':          models.efficientnet_b7(),
+                    'efficientnet v2 l':        models.efficientnet_v2_l(),
+                    'efficientnet v2 m':        models.efficientnet_v2_m(),
+                    'efficientnet v2 s':        models.efficientnet_v2_s(),
                 }
     
     for name, model in all_model.items():
