@@ -21,7 +21,7 @@ from torchvision import models
 Complexity Calculator
 ========================================================================================================================
 """
-class Complexity():
+class Complexity_Calculator():
 
     """
     ====================================================================================================================
@@ -395,10 +395,10 @@ class Complexity():
 
     """
     ====================================================================================================================
-    Profile
+    Output Log
     ====================================================================================================================
     """
-    def profile(self, order: str | Literal['G', 'M', 'k'] = 'M', num_input: int = 1, batch_size: int = 16) -> None:
+    def log(self, order: str | Literal['G', 'M', 'k'] = 'M', num_input: int = 1, batch_size: int = 16) -> None:
 
         """
         ----------------------------------------------------------------------------------------------------------------
@@ -493,7 +493,7 @@ class Complexity():
             
             # Title
             print('*' * 125)
-            print('Warning !!! Above Estimations Ignore Following Modules !!! The FLOPs Would be Underestimated !!!')
+            print('Warning !! Above Estimations Ignore Following Modules !! The FLOPs Would be Underestimated !!')
             print('*' * 125)
 
             # Output Log
@@ -528,28 +528,28 @@ if __name__ == '__main__':
     #                 'densenet201':          models.densenet201(),
     #             }
     
-    # # Model
-    # all_model = {
-    #                 'convnext_base':        models.convnext_base(),
-    #                 'convnext_large':       models.convnext_large(),
-    #                 'convnext small':       models.convnext_small(),
-    #                 'convnext tiny':        models.convnext_tiny(),
-    #             }
-
     # Model
     all_model = {
-                    'efficientnet b0':          models.efficientnet_b0(),
-                    'efficientnet b1':          models.efficientnet_b1(),
-                    'efficientnet b2':          models.efficientnet_b2(),
-                    'efficientnet b3':          models.efficientnet_b3(),
-                    'efficientnet b4':          models.efficientnet_b4(),
-                    'efficientnet b5':          models.efficientnet_b5(),
-                    'efficientnet b6':          models.efficientnet_b6(),
-                    'efficientnet b7':          models.efficientnet_b7(),
-                    'efficientnet v2 l':        models.efficientnet_v2_l(),
-                    'efficientnet v2 m':        models.efficientnet_v2_m(),
-                    'efficientnet v2 s':        models.efficientnet_v2_s(),
+                    'convnext_base':        models.convnext_base(),
+                    'convnext_large':       models.convnext_large(),
+                    'convnext small':       models.convnext_small(),
+                    'convnext tiny':        models.convnext_tiny(),
                 }
+
+    # # Model
+    # all_model = {
+    #                 'efficientnet b0':          models.efficientnet_b0(),
+    #                 'efficientnet b1':          models.efficientnet_b1(),
+    #                 'efficientnet b2':          models.efficientnet_b2(),
+    #                 'efficientnet b3':          models.efficientnet_b3(),
+    #                 'efficientnet b4':          models.efficientnet_b4(),
+    #                 'efficientnet b5':          models.efficientnet_b5(),
+    #                 'efficientnet b6':          models.efficientnet_b6(),
+    #                 'efficientnet b7':          models.efficientnet_b7(),
+    #                 'efficientnet v2 l':        models.efficientnet_v2_l(),
+    #                 'efficientnet v2 m':        models.efficientnet_v2_m(),
+    #                 'efficientnet v2 s':        models.efficientnet_v2_s(),
+    #             }
     
     for name, model in all_model.items():
 
@@ -557,7 +557,7 @@ if __name__ == '__main__':
         print(name)
 
         # Compute Complexity
-        calculator = Complexity(model, (3, 224, 224), torch.device('cuda'))
-        calculator.profile('G', num_input = 1)
+        calculator = Complexity_Calculator(model, (3, 224, 224), torch.device('cuda'))
+        calculator.log('G', num_input = 1)
 
     pass
